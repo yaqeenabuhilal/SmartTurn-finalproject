@@ -10,6 +10,46 @@ from matplotlib.patches import Rectangle, Circle
 from matplotlib import transforms
 import matplotlib.patches as mpatches
 from PIL import Image
+import sqlite3, os
+
+DB_PATH = "data/smartturn.db"
+os.makedirs("data", exist_ok=True)
+
+def init_db():
+    con = sqlite3.connect(DB_PATH)
+    cur = con.cursor()
+    cur.execute("""
+      CREATE TABLE IF NOT EXISTS events(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        timestamp TEXT,
+        event TEXT,
+        side TEXT,
+        angle INTEGER,
+        mode TEXT,
+        status TEXT
+      )
+    """)
+    con.commit()
+    con.close()
+
+def fetch_log_df():
+    con = sqlite3.connect(DB_PATH)
+    df = pd.read_sql_query(
+        "SELECT timestamp,event,side,angle,mode,status FROM events ORDER BY id", con
+    )
+    con.close()
+    return df
+
+def insert_event(row):
+    con = sqlite3.connect(DB_PATH)
+    cur = con.cursor()
+    cur.execute(
+        "INSERT INTO events(timestamp,event,side,angle,mode,status) VALUES (?,?,?,?,?,?)",
+        (row["timestamp"], row["event"], row["side"], int(row["angle"]), row["mode"], row["status"])
+    )
+    con.commit()
+    con.close()
+
 
 # ----------------------------- Page Setup & Style -----------------------------
 st.set_page_config(page_title="SmartTurn Demo", layout="wide")
@@ -32,6 +72,8 @@ div[data-testid="stDataFrame"] { border-radius: var(--radius); overflow: hidden;
 BASE_DIR = Path(__file__).parent
 BED_PHOTO = (BASE_DIR / "assets" / "bed_photo.png").resolve()  # صورة التخت الحقيقي
 
+init_db()
+
 # ----------------------------- State Helpers ---------------------------------
 def init_state():
     s = st.session_state
@@ -50,11 +92,15 @@ def init_state():
     if "grace_minutes" not in s:
         s.grace_minutes = 5
     if "log" not in s:
-        s.log = pd.DataFrame(columns=["timestamp","event","side","angle","mode","status"])
+        try:
+            s.log = fetch_log_df()
+        except Exception:
+            s.log = pd.DataFrame(columns=["timestamp","event","side","angle","mode","status"])
     if "last_side" not in s:
         s.last_side = "BACK"
     if "last_angle" not in s:
         s.last_angle = 0
+
 
 def rotate_sequence():
     st.session_state.seq_index = (st.session_state.seq_index + 1) % len(st.session_state.sequence)
@@ -62,11 +108,14 @@ def rotate_sequence():
 def add_log(ts, event, side, angle, mode, status="OK"):
     row = {
         "timestamp": ts.strftime("%Y-%m-%d %H:%M"),
-        "event": event, "side": side, "angle": angle, "mode": mode, "status": status
+        "event": event, "side": side, "angle": angle,
+        "mode": mode, "status": status
     }
+    insert_event(row)  # NEW: persist to SQLite
     st.session_state.log = pd.concat([st.session_state.log, pd.DataFrame([row])], ignore_index=True)
     st.session_state.last_side = side
     st.session_state.last_angle = angle
+
 
 def apply_auto_change():
     side = st.session_state.sequence[st.session_state.seq_index]
